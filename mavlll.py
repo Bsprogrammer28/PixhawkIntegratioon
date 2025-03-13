@@ -1,11 +1,10 @@
 from pymavlink import mavutil
 import time
 
-# Use telemetry port (Find in Device Manager, e.g., 'COM7' for Windows or '/dev/ttyUSB0' for Linux)
-CONNECTION_STRING = 'COM7'  # Change this to your telemetry port
-BAUD_RATE = 57600  # Typical baud rate for telemetry
+# Connect to Pixhawk via Telemetry (Change COM Port if needed)
+CONNECTION_STRING = 'COM7'  # Replace with your telemetry port (e.g., 'COM7' or '/dev/ttyUSB0')
+BAUD_RATE = 57600  # Standard telemetry baud rate
 
-# Connect to Pixhawk via telemetry
 print("Connecting to Pixhawk via Telemetry...")
 connection = mavutil.mavlink_connection(CONNECTION_STRING, baud=BAUD_RATE)
 connection.wait_heartbeat()
@@ -24,15 +23,17 @@ def set_mode(mode):
     )
     print(f"Switched to {mode} mode")
 
+# Disable pre-arm checks (Since GPS is not available)
 def disable_prearm_checks():
     print("Disabling pre-arm checks...")
     connection.mav.param_set_send(
         connection.target_system, connection.target_component,
         b'ARMING_CHECK', 0, mavutil.mavlink.MAV_PARAM_TYPE_INT32
     )
-    time.sleep(1)  # Allow time for the parameter change
+    time.sleep(1)
     print("Pre-arm checks disabled.")
 
+# Arm the motors
 def arm_motors():
     print("Arming motors...")
     connection.mav.command_long_send(
@@ -43,32 +44,41 @@ def arm_motors():
     connection.motors_armed_wait()
     print("Motors Armed!")
 
-def set_throttle(throttle):
-    """ Set the throttle manually using RC override. """
-    connection.mav.rc_channels_override_send(
-        connection.target_system, connection.target_component,
-        0, 0, throttle, 0, 0, 0, 0, 0  # Channel 3 is throttle
-    )
-    print(f"Throttle set to {throttle}")
+# Function to maintain altitude using local position setpoint
+def maintain_altitude(target_altitude, duration=5):
+    print(f"Holding altitude at {target_altitude}m for {duration} seconds...")
+    
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        connection.mav.set_position_target_local_ned_send(
+            0,  # time_boot_ms (not required)
+            connection.target_system, connection.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            0b0000111111000111,  # Only control Z (altitude)
+            0, 0, -target_altitude,  # X, Y, Z (NED frame, so Z is negative for altitude)
+            0, 0, 0,  # vx, vy, vz
+            0, 0, 0,  # afx, afy, afz
+            0, 0  # yaw, yaw_rate
+        )
+        time.sleep(0.2)  # Send command every 200ms
 
-def takeoff():
-    print("Taking off...")
-    set_throttle(1600)  # Increase throttle to take off
-    time.sleep(5)  # Hover for 5 seconds
-
+# Landing function
 def land():
     print("Landing...")
-    set_throttle(1300)  # Gradually reduce throttle
-    time.sleep(3)
-    set_throttle(1000)  # Fully lower throttle for landing
+    connection.mav.command_long_send(
+        connection.target_system, connection.target_component,
+        mavutil.mavlink.MAV_CMD_NAV_LAND, 0,
+        0, 0, 0, 0, 0, 0, 0
+    )
+    time.sleep(10)  # Allow time for landing
     print("Landed successfully!")
 
 # Execute flight sequence
-set_mode("ALT_HOLD")
+set_mode("ALT_HOLD")  # Use Altitude Hold mode
 time.sleep(2)
 disable_prearm_checks()
 time.sleep(2)
 arm_motors()
 time.sleep(2)
-takeoff()
+maintain_altitude(target_altitude=1, duration=5)  # Maintain altitude at 2m for 5 sec
 land()
